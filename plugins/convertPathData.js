@@ -87,8 +87,8 @@ export const fn = (root, params) => {
     applyTransforms: _applyTransforms = true,
     applyTransformsStroked = true,
     makeArcs = {
-      threshold: 2.5,
-      tolerance: 0.5,
+      threshold: 2.5, // coefficient of rounding error
+      tolerance: 0.5, // percentage of radius
     },
     straightCurves = true,
     convertToQ = true,
@@ -103,7 +103,7 @@ export const fn = (root, params) => {
     utilizeAbsolute = true,
     leadingZero = true,
     negativeExtraSpace = true,
-    noSpaceAfterFlags = false,
+    noSpaceAfterFlags = false, // a20 60 45 0 1 30 20 → a20 60 45 0130 20
     forceAbsolutePath = false,
   } = params;
 
