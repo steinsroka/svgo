@@ -5,6 +5,8 @@ import { collectStylesheet, computeStyle } from '../lib/style.js';
 import { visit } from '../lib/util/visit.js';
 import { cleanupOutData, toFixed } from '../lib/svgo/tools.js';
 
+/** @typedef {import('./_path.js').Js2PathParams} Js2PathParams */
+
 /**
  * @typedef {[number, number]} Point
  *
@@ -55,6 +57,18 @@ let arcThreshold;
 let arcTolerance;
 
 /**
+ * Convert path data in chunks to avoid memory issues
+ * @param {import('../lib/types.js').PathDataItem[]} pathData
+ * @param {number} chunkSize
+ * @returns {Generator<import('../lib/types.js').PathDataItem[]>}
+ */
+function* processPathDataInChunks(pathData, chunkSize = 1000) {
+  for (let i = 0; i < pathData.length; i += chunkSize) {
+    yield pathData.slice(i, i + chunkSize);
+  }
+}
+
+/**
  * Convert absolute Path to relative,
  * collapse repeated instructions,
  * detect and convert Lineto shorthands,
@@ -70,12 +84,11 @@ let arcTolerance;
  */
 export const fn = (root, params) => {
   const {
-    // TODO convert to separate plugin in v3
     applyTransforms: _applyTransforms = true,
     applyTransformsStroked = true,
     makeArcs = {
-      threshold: 2.5, // coefficient of rounding error
-      tolerance: 0.5, // percentage of radius
+      threshold: 2.5,
+      tolerance: 0.5,
     },
     straightCurves = true,
     convertToQ = true,
@@ -90,7 +103,7 @@ export const fn = (root, params) => {
     utilizeAbsolute = true,
     leadingZero = true,
     negativeExtraSpace = true,
-    noSpaceAfterFlags = false, // a20 60 45 0 1 30 20 → a20 60 45 0130 20
+    noSpaceAfterFlags = false,
     forceAbsolutePath = false,
   } = params;
 
@@ -163,45 +176,57 @@ export const fn = (root, params) => {
               computedStyle['stroke-linejoin'].value === 'round'
             : true;
 
-          let data = path2js(node);
+          const pathData = path2js(node);
+          if (pathData.length === 0) {
+            return;
+          }
 
-          // TODO: get rid of functions returns
-          if (data.length) {
-            const includesVertices = data.some(
-              (item) => item.command !== 'm' && item.command !== 'M',
-            );
-            convertToRelative(data);
+          const includesVertices = pathData.some(
+            (item) => item.command !== 'm' && item.command !== 'M',
+          );
 
-            data = filters(data, newParams, {
+          // Process path data in chunks
+          /** @type {import('../lib/types.js').PathDataItem[]} */
+          const processedChunks = [];
+          for (const chunk of processPathDataInChunks(pathData)) {
+            convertToRelative(chunk);
+            const filteredChunk = filters(chunk, newParams, {
               isSafeToUseZ,
               maybeHasStrokeAndLinecap,
               hasMarkerMid,
             });
-
             if (utilizeAbsolute) {
-              data = convertToMixed(data, newParams);
+              processedChunks.push(...convertToMixed(filteredChunk, newParams));
+            } else {
+              processedChunks.push(...filteredChunk);
             }
-
-            const hasMarker =
-              node.attributes['marker-start'] != null ||
-              node.attributes['marker-end'] != null;
-            const isMarkersOnlyPath =
-              hasMarker &&
-              includesVertices &&
-              data.every(
-                (item) => item.command === 'm' || item.command === 'M',
-              );
-
-            if (isMarkersOnlyPath) {
-              data.push({
-                command: 'z',
-                args: [],
-              });
-            }
-
-            // @ts-expect-error
-            js2path(node, data, newParams);
           }
+
+          const hasMarker =
+            node.attributes['marker-start'] != null ||
+            node.attributes['marker-end'] != null;
+          const isMarkersOnlyPath =
+            hasMarker &&
+            includesVertices &&
+            processedChunks.every(
+              (item) => item.command === 'm' || item.command === 'M',
+            );
+
+          if (isMarkersOnlyPath) {
+            /** @type {import('../lib/types.js').PathDataItem} */
+            const closePath = {
+              command: 'z',
+              args: [],
+            };
+            processedChunks.push(closePath);
+          }
+
+          /** @type {Js2PathParams} */
+          const js2PathParams = {
+            floatPrecision: typeof floatPrecision === 'number' ? floatPrecision : undefined,
+            noSpaceAfterFlags,
+          };
+          js2path(node, processedChunks, js2PathParams);
         }
       },
     },
